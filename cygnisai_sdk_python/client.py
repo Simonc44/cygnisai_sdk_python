@@ -1,5 +1,6 @@
 import httpx
 import json
+# Removed: import os # No longer needed for base_url
 from typing import AsyncGenerator, List, Dict, Any, Optional
 from pydantic import BaseModel, HttpUrl, ValidationError
 
@@ -33,6 +34,7 @@ class CygnisAIClient:
     def __init__(
         self, 
         api_key: str, 
+        # base_url est maintenant une valeur par défaut simple, elle sera passée explicitement par configure()
         base_url: str = "https://needlessly-faithful-gopher.ngrok-free.app",
         timeout: Optional[float] = 30.0, # Temps d'attente par défaut pour les requêtes
         retries: Optional[int] = 0, # Nombre de tentatives en cas d'échec réseau (non implémenté directement par httpx, mais peut être géré avec des bibliothèques comme tenacity)

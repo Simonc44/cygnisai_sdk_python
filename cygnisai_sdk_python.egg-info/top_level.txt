@@ -1,2 +1,0 @@
-cygnisai_sdk_python
-tests

@@ -1,105 +1,85 @@
-# CygnisAI Python SDK
+# CygnisAI Python Library
 
-Le SDK Python officiel pour interagir avec l'API CygnisAI.
+La bibliothèque Python CygnisAI offre l'interface la plus simple et la plus rapide pour intégrer les modèles de langage Cygnis dans vos projets. Conçue pour être intuitive, elle réduit le code nécessaire au strict minimum.
+
+> **Note :** L'accès à l'API est actuellement en **bêta privée**. La création de clés n'est pas encore ouverte au public.
+
+---
 
 ## Installation
 
+Installez la bibliothèque directement depuis GitHub :
+
 ```bash
-pip install cygnisai-sdk-python
+pip install git+https://github.com/Simonc44/cygnisai_sdk_python.git
+
 ```
 
-## Utilisation
+## Démarrage Rapide
+
+Voici comment générer du contenu en quelques lignes seulement :
 
 ```python
-import asyncio
-from cygnisai_sdk_python import CygnisAIClient, ChatRequest, Message, CygnisAIError
-import os # Ajouté pour os.getenv
+import os
+from cygnisai_sdk_python import configure, GenerativeModel
 
-async def main():
-    api_key = os.getenv("CYGNIS_API_KEY", "VOTRE_CLE_API_CYGNIS")  # Remplacez par votre clé API réelle
-    base_url = os.getenv("CYGNIS_BASE_URL", "https://needlessly-faithful-gopher.ngrok-free.app") # Utilisation de la variable d'environnement
-    
-    if api_key == "VOTRE_CLE_API_CYGNIS": # Vérification si la clé par défaut est toujours là
-        print("ATTENTION: Veuillez remplacer 'VOTRE_CLE_API_CYGNIS' par votre clé API réelle ou définir la variable d'environnement CYGNIS_API_KEY.")
-        return
+# 1. Configuration
+configure(api_key="VOTRE_CLE_API_PRIVEE")
 
-    print(f"Initialisation du client CygnisAI avec l'URL de base: {base_url}")
-    client = CygnisAIClient(api_key=api_key, base_url=base_url)
+# 2. Initialisation du modèle
+model = GenerativeModel('alpha2')
 
-    try:
-        # --- Exemple d'appel à l'API de chat (non-stream) ---
-        chat_request_non_stream = ChatRequest(
-            model="alpha1",  # Nom du modèle corrigé
-            prompt="Qui es tu ?",
-            messages=[
-                Message(role="user", content="Bonjour, CygnisAI !"),
-                Message(role="assistant", content="Bonjour ! Comment puis-je vous aider ?"),
-                Message(role="user", content="Quel est le rôle du moteur vectoriel Rust dans CygnisAI ?")
-            ],
-            stream=False
-        )
+# 3. Génération de contenu
+response = model.generate_content("Donne-moi une astuce pour coder en Python.")
 
-        print("Envoi de la requête de chat (non-stream)...")
-        response = await client.chat(chat_request_non_stream)
-        print("\nRéponse du chat (non-stream) :")
-        print(f"ID: {response.id}")
-        # Correction ici : Le contenu de la réponse est dans 'response.response'
-        print(f"Contenu: {response.response}") 
-        print(f"Latence: {response.latency_ms} ms")
-        print(f"Usage: {response.usage}")
-        # Vous pouvez imprimer d'autres champs de la réponse si nécessaire
+# 4. Affichage du résultat
+print(response.text)
 
-        # --- Exemple d'appel à l'API de chat (stream) ---
-        chat_request_stream = ChatRequest( # Création d'un objet ChatRequest pour le stream
-            model="alpha1",
-            prompt="Raconte-moi une blague.",
-            messages=[
-                Message(role="user", content="Bonjour, CygnisAI !"),
-                Message(role="assistant", content="Bonjour ! Comment puis-je vous aider ?"),
-                Message(role="user", content="Raconte-moi une blague.")
-            ],
-            stream=True
-        )
-
-        print("\nEnvoi de la requête de chat (stream)...")
-        print("Réponse du chat (stream) :")
-        # Correction ici : Passer l'objet ChatRequest complet
-        async for token in client.chat_stream(request=chat_request_stream):
-            print(token, end="", flush=True)
-        print("\n") # Pour une nouvelle ligne après le stream
-
-    except CygnisAIError as e:
-        print(f"\n!!! Erreur CygnisAI !!!")
-        print(f"Message: {e.message}")
-        if e.status_code:
-            print(f"Code HTTP: {e.status_code}")
-        if e.error_details:
-            print(f"Détails: {e.error_details}")
-    except Exception as e:
-        print(f"\n!!! Une erreur inattendue est survenue !!!")
-        print(f"Erreur: {e}")
-    finally:
-        await client.close()
-        print("\nClient CygnisAI fermé.")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
 ```
 
-## Développement
+---
 
-Pour développer le SDK, vous pouvez l'installer en mode éditable :
-```bash
-cd /chemin/vers/cygnisai_sdk_python
-pip install -e .
+## Modèles Disponibles
+
+L'API CygnisAI propose actuellement trois variantes de modèles, optimisées pour différents cas d'usage :
+
+| Modèle | Description | État |
+| --- | --- | --- |
+| **`alpha_v01`** | Version initiale de test, idéale pour le prototypage léger. | Stable |
+| **`alpha1`** | Modèle équilibré, optimisé pour la rapidité de réponse. | Stable |
+| **`alpha2`** | Modèle le plus performant, recommandé pour les raisonnements complexes. | Stable |
+
+---
+
+## Configuration
+
+### Variables d'Environnement
+
+Pour plus de sécurité, vous pouvez définir votre clé via les variables d'environnement. La méthode `configure()` la détectera automatiquement.
+
+* `CYGNIS_API_KEY` : Votre clé secrète CygnisAI.
+
+### Timeout
+
+Vous pouvez ajuster le délai d'attente maximum pour les réponses longues directement dans la configuration :
+
+```python
+configure(api_key="...", timeout=120.0)
+
 ```
 
-## Contribution
+---
 
-Les contributions sont les bienvenues ! Veuillez ouvrir une issue ou soumettre une pull request.
+## État des Fonctionnalités
+
+* [x] **Interface Simplifiée** (`GenerativeModel`) - Nouveau 🚀
+* [x] **Accès direct via `.text**` - Stable
+* [x] **Validation Pydantic v2** - Inclus
+* [ ] **Streaming** - En développement
+* [ ] **Accès Public** - En attente (Bêta fermée)
+
+---
 
 ## Licence
 
-Ce projet est sous licence MIT.
-```
+Ce projet est sous licence **MIT**. Voir le fichier `LICENSE` pour plus de détails.
