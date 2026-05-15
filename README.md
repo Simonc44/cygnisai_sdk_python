@@ -4,6 +4,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-brightgreen)](https://github.com/Simonc44/cygnisai_sdk_python)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests Status](https://img.shields.io/github/actions/workflow/status/Simonc44/cygnisai_sdk_python/tests.yml?label=tests)](https://github.com/Simonc44/cygnisai_sdk_python/actions)
+[![Documentation](https://img.shields.io/badge/docs-view-brightgreen)](https://simonc44.github.io/cygnisai-python-sdk/)
 
 The simplest, fastest way to integrate CygnisAI language models into your Python projects.
 
