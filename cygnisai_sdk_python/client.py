@@ -1,173 +1,330 @@
-import httpx
-import json
-# Removed: import os # No longer needed for base_url
-from typing import AsyncGenerator, List, Dict, Any, Optional
-from pydantic import BaseModel, HttpUrl, ValidationError
+"""
+CygnisAI SDK - Async HTTP Client
+Handles authentication, serialisation, error mapping, retries and streaming.
+"""
 
-from .models import ChatRequest, ChatResponse, Message # Added Message import for clarity
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, AsyncGenerator, Optional
+
+import httpx
+from pydantic import ValidationError
+
+from .models import ChatRequest, ChatResponse
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Custom exceptions
+# ---------------------------------------------------------------------------
 
 class CygnisAIError(Exception):
-    """
-    Exception personnalisée levée pour les erreurs spécifiques rencontrées lors de l'interaction avec l'API CygnisAI.
-    """
-    def __init__(self, message: str, status_code: Optional[int] = None, error_details: Optional[Any] = None):
-        """
-        Initialise une nouvelle instance de CygnisAIError.
+    """Base exception for all CygnisAI SDK errors."""
 
-        Args:
-            message (str): Message d'erreur descriptif.
-            status_code (Optional[int]): Code d'état HTTP de la réponse d'erreur, si disponible.
-            error_details (Optional[Any]): Détails supplémentaires de l'erreur, souvent un objet JSON.
-        """
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        error_details: Optional[Any] = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.error_details = error_details
 
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"{self.__class__.__name__}("
+            f"message={self.message!r}, "
+            f"status_code={self.status_code!r})"
+        )
+
+
+class AuthenticationError(CygnisAIError):
+    """Raised on HTTP 401 / 403."""
+
+
+class RateLimitError(CygnisAIError):
+    """Raised on HTTP 429."""
+
+
+class ServerError(CygnisAIError):
+    """Raised on HTTP 5xx."""
+
+
+class NetworkError(CygnisAIError):
+    """Raised when the request never reaches the server."""
+
+
+class ResponseValidationError(CygnisAIError):
+    """Raised when the API response doesn't match the expected schema."""
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+_STATUS_EXCEPTION_MAP: dict[int, type[CygnisAIError]] = {
+    401: AuthenticationError,
+    403: AuthenticationError,
+    429: RateLimitError,
+}
+
+
+def _map_status_error(status_code: int, message: str, details: Any) -> CygnisAIError:
+    exc_cls = _STATUS_EXCEPTION_MAP.get(
+        status_code,
+        ServerError if status_code >= 500 else CygnisAIError,
+    )
+    return exc_cls(message, status_code=status_code, error_details=details)
+
+
+def _extract_error_message(body: dict[str, Any]) -> str:
+    return (
+        body.get("detail")
+        or body.get("message")
+        or body.get("error")
+        or str(body)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+DEFAULT_BASE_URL = "https://needlessly-faithful-gopher.ngrok-free.app"
+DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_RETRIES = 3
+_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
 class CygnisAIClient:
     """
-    Client Python asynchrone pour interagir avec l'API CygnisAI.
+    Async HTTP client for the CygnisAI API.
 
-    Ce client gère l'authentification, la sérialisation/désérialisation des données
-    et la gestion des erreurs pour faciliter l'intégration de l'API CygnisAI.
+    Can be used as an async context manager::
+
+        async with CygnisAIClient(api_key="...") as client:
+            response = await client.chat(request)
+
+    Or managed manually::
+
+        client = CygnisAIClient(api_key="...")
+        try:
+            ...
+        finally:
+            await client.close()
     """
-    def __init__(
-        self, 
-        api_key: str, 
-        # base_url est maintenant une valeur par défaut simple, elle sera passée explicitement par configure()
-        base_url: str = "https://needlessly-faithful-gopher.ngrok-free.app",
-        timeout: Optional[float] = 30.0, # Temps d'attente par défaut pour les requêtes
-        retries: Optional[int] = 0, # Nombre de tentatives en cas d'échec réseau (non implémenté directement par httpx, mais peut être géré avec des bibliothèques comme tenacity)
-        **httpx_client_args: Any # Permet de passer des arguments supplémentaires à httpx.AsyncClient
-    ):
-        """
-        Initialise une nouvelle instance du client CygnisAI.
 
-        Args:
-            api_key (str): Votre clé API CygnisAI.
-            base_url (str): L'URL de base de l'API CygnisAI.
-            timeout (Optional[float]): Le délai d'attente en secondes pour les requêtes HTTP.
-            retries (Optional[int]): Le nombre de tentatives en cas d'échec réseau (actuellement non utilisé directement par httpx, mais peut être étendu).
-            **httpx_client_args: Arguments supplémentaires à passer au constructeur de httpx.AsyncClient.
-        """
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = DEFAULT_BASE_URL,
+        timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        **httpx_kwargs: Any,
+    ) -> None:
+        if not api_key:
+            raise ValueError("api_key must not be empty.")
+
         self.api_key = api_key
-        self.base_url = base_url
-        
-        # Configuration par défaut des headers
+        self.base_url = base_url.rstrip("/")
+        self.max_retries = max(0, max_retries)
+
         default_headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "cygnisai-python-sdk/1.0.0",
         }
-        
-        # Fusionner les headers par défaut avec ceux passés via httpx_client_args
-        headers = {**default_headers, **httpx_client_args.pop("headers", {})}
+        headers = {**default_headers, **httpx_kwargs.pop("headers", {})}
 
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout,
             headers=headers,
-            **httpx_client_args
+            **httpx_kwargs,
         )
 
-    async def close(self):
-        """
-        Ferme la session HTTP sous-jacente du client.
-        Il est recommandé d'appeler cette méthode lorsque le client n'est plus nécessaire
-        pour libérer les ressources.
-        """
-        await self._client.aclose()
+    # ------------------------------------------------------------------
+    # Context manager support
+    # ------------------------------------------------------------------
 
-    async def chat_stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
-        """
-        Envoie une requête de chat à l'API CygnisAI et reçoit la réponse en mode streaming.
+    async def __aenter__(self) -> "CygnisAIClient":
+        return self
 
-        Args:
-            request (ChatRequest): L'objet de requête de chat contenant le modèle, le prompt,
-                                   l'historique des messages et l'option de streaming.
+    async def __aexit__(self, *_: Any) -> None:
+        await self.close()
 
-        Yields:
-            str: Des fragments de texte (tokens) de la réponse du modèle.
+    async def close(self) -> None:
+        """Release the underlying HTTP connection pool."""
+        if not self._client.is_closed:
+            await self._client.aclose()
 
-        Raises:
-            CygnisAIError: Si une erreur survient lors de la communication avec l'API
-                           ou si la réponse de l'API indique une erreur.
-        """
-        async with self._client.stream("POST", "/v3/chat", json=request.model_dump(exclude_none=True)) as response:
-            if response.status_code != 200:
-                error_text = await response.aread()
-                try:
-                    error_json = json.loads(error_text.decode())
-                    error_msg = error_json.get("detail") or error_json.get("error") or error_text.decode()
-                    raise CygnisAIError(f"Erreur API (HTTP {response.status_code}): {error_msg}", response.status_code, error_json)
-                except json.JSONDecodeError:
-                    raise CygnisAIError(f"Erreur API (HTTP {response.status_code}): {error_text.decode()}", response.status_code)
+    # ------------------------------------------------------------------
+    # Internal: retry logic
+    # ------------------------------------------------------------------
 
-            async for line in response.aiter_lines():
-                if not line.strip():
-                    continue
+    async def _post_with_retry(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> httpx.Response:
+        """POST *path* with exponential-backoff retries on transient errors."""
+        import asyncio
 
-                if line.startswith("data: "):
-                    content = line[6:].strip()
+        last_exc: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = await self._client.post(path, json=payload)
+                if resp.status_code not in _RETRY_STATUS_CODES or attempt == self.max_retries:
+                    return resp
+                wait = 2 ** attempt
+                logger.warning(
+                    "CygnisAI: HTTP %s on attempt %d/%d — retrying in %ds",
+                    resp.status_code, attempt + 1, self.max_retries + 1, wait,
+                )
+                await asyncio.sleep(wait)
+            except httpx.RequestError as exc:
+                last_exc = exc
+                if attempt == self.max_retries:
+                    break
+                wait = 2 ** attempt
+                logger.warning(
+                    "CygnisAI: Network error on attempt %d/%d — retrying in %ds: %s",
+                    attempt + 1, self.max_retries + 1, wait, exc,
+                )
+                await asyncio.sleep(wait)
 
-                    if content == "[DONE]":
-                        break
+        raise NetworkError(
+            f"Request failed after {self.max_retries + 1} attempts: {last_exc}",
+            error_details=str(last_exc),
+        )
 
-                    try:
-                        data = json.loads(content)
-                        
-                        if isinstance(data, dict):
-                            if "error" in data:
-                                yield f"\n[ERREUR SERVEUR]: {data.get('error', 'Erreur inconnue dans le flux')}\n"
-                                continue
-
-                            if "detail" in data:
-                                if isinstance(data["detail"], list) and data["detail"] and isinstance(data["detail"][0], dict):
-                                    error_msgs = [f"{err.get('loc', ['unknown'])[-1]}: {err.get('msg', 'unknown error')}" for err in data["detail"]]
-                                    yield f"\n[ERREUR SERVEUR - Validation]: {'; '.join(error_msgs)}\n"
-                                else:
-                                    yield f"\n[ERREUR SERVEUR]: {data.get('detail', 'Erreur de détail inconnue dans le flux')}\n"
-                                continue
-
-                            token = data.get("response", "") or data.get("text", "")
-                            yield token
-                        else:
-                            yield str(data)
-                            
-                    except json.JSONDecodeError:
-                        yield content
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         """
-        Envoie une requête de chat à l'API CygnisAI et reçoit la réponse complète (non-streaming).
+        Send a chat request and return the complete response.
 
         Args:
-            request (ChatRequest): L'objet de requête de chat contenant le modèle, le prompt,
-                                   l'historique des messages. L'option de streaming sera ignorée ou forcée à False.
+            request: A :class:`~cygnisai_sdk_python.models.ChatRequest` instance.
 
         Returns:
-            ChatResponse: L'objet de réponse de chat contenant l'ID, la réponse complète,
-                          la latence et les informations d'utilisation.
+            :class:`~cygnisai_sdk_python.models.ChatResponse`
 
         Raises:
-            CygnisAIError: Si une erreur survient lors de la communication avec l'API
-                           ou si la réponse de l'API indique une erreur.
+            AuthenticationError: On 401/403.
+            RateLimitError: On 429.
+            ServerError: On 5xx.
+            NetworkError: On connection failure.
+            ResponseValidationError: If the response body doesn't match the schema.
+            CygnisAIError: For any other API error.
         """
+        request.stream = False
+        payload = request.model_dump(exclude_none=True)
+
         try:
-            # Assurez-vous que stream est False pour la requête non-stream
-            request.stream = False 
-            response_data = await self._client.post("/v3/chat", json=request.model_dump(exclude_none=True))
-            response_data.raise_for_status()
-            return ChatResponse(**response_data.json())
-        except httpx.HTTPStatusError as e:
+            raw = await self._post_with_retry("/v3/chat", payload)
+        except NetworkError:
+            raise
+
+        if raw.status_code != 200:
             try:
-                error_json = e.response.json()
-                error_msg = error_json.get("detail") or error_json.get("message") or error_json
-                raise CygnisAIError(f"Erreur API (HTTP {e.response.status_code}): {error_msg}", e.response.status_code, error_json)
-            except json.JSONDecodeError:
-                raise CygnisAIError(f"Erreur API (HTTP {e.response.status_code}): {e.response.text}", e.status_code)
-        except httpx.RequestError as e:
-            raise CygnisAIError(f"Erreur réseau: {e}", error_details=str(e))
-        except ValidationError as e:
-            raise CygnisAIError(f"Erreur de validation de la réponse du chat: {e}", error_details=str(e))
-        except Exception as e:
-            raise CygnisAIError(f"Erreur inattendue du SDK: {e}", error_details=str(e))
+                body = raw.json()
+                msg = _extract_error_message(body)
+            except Exception:
+                body = {}
+                msg = raw.text
+            raise _map_status_error(
+                raw.status_code,
+                f"API error (HTTP {raw.status_code}): {msg}",
+                body,
+            )
+
+        try:
+            return ChatResponse(**raw.json())
+        except (ValidationError, Exception) as exc:
+            raise ResponseValidationError(
+                f"Failed to parse API response: {exc}",
+                error_details=str(exc),
+            ) from exc
+
+    async def chat_stream(
+        self, request: ChatRequest
+    ) -> AsyncGenerator[str, None]:
+        """
+        Send a chat request and yield tokens as they arrive (SSE).
+
+        Args:
+            request: A :class:`~cygnisai_sdk_python.models.ChatRequest` instance.
+
+        Yields:
+            str – individual text tokens from the model.
+
+        Raises:
+            CygnisAIError (and subclasses): as documented on :meth:`chat`.
+        """
+        request.stream = True
+        payload = request.model_dump(exclude_none=True)
+
+        async with self._client.stream("POST", "/v3/chat", json=payload) as response:
+            if response.status_code != 200:
+                error_bytes = await response.aread()
+                try:
+                    body = json.loads(error_bytes.decode())
+                    msg = _extract_error_message(body)
+                except Exception:
+                    body = {}
+                    msg = error_bytes.decode()
+                raise _map_status_error(
+                    response.status_code,
+                    f"API error (HTTP {response.status_code}): {msg}",
+                    body,
+                )
+
+            async for raw_line in response.aiter_lines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                if line.startswith("data:"):
+                    content = line[5:].strip()
+
+                    if content == "[DONE]":
+                        return
+
+                    try:
+                        data = json.loads(content)
+                    except json.JSONDecodeError:
+                        # Yield raw text if it isn't valid JSON
+                        yield content
+                        continue
+
+                    if not isinstance(data, dict):
+                        yield str(data)
+                        continue
+
+                    # Surface server-side errors embedded in the stream
+                    if "error" in data or "detail" in data:
+                        err_key = "error" if "error" in data else "detail"
+                        err_val = data[err_key]
+                        if isinstance(err_val, list):
+                            msgs = [
+                                f"{e.get('loc', ['?'])[-1]}: {e.get('msg', '')}"
+                                for e in err_val
+                                if isinstance(e, dict)
+                            ]
+                            err_val = "; ".join(msgs)
+                        raise CygnisAIError(
+                            f"Server error in stream: {err_val}",
+                            error_details=data,
+                        )
+
+                    token = data.get("response") or data.get("text") or ""
+                    if token:
+                        yield token

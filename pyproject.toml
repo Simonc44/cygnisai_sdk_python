@@ -1,27 +1,49 @@
 [project]
 name = "cygnisai-sdk-python"
-version = "0.1.0"
-description = "SDK Python officiel pour l'API CygnisAI"
+version = "1.0.0"
+description = "Official Python SDK for the CygnisAI API"
 authors = [{ name = "Simon CHUSSEAU", email = "cygnis.ai@gmail.com" }]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["cygnisai", "api", "sdk", "ai", "llm", "inference"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
 dependencies = [
     "httpx>=0.27.0",
     "pydantic>=2.0.0",
 ]
-requires-python = ">=3.9"
-readme = "README.md"
-license = { text = "MIT" } # Ou votre licence choisie
-keywords = ["cygnisai", "api", "sdk", "ai", "inference", "vision"]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "anyio[trio]",
+    "pytest-httpx>=0.30",
 ]
 
 [build-system]
 requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta" # Gardons setuptools.build_meta pour le moment, car setup.py est géré par setuptools
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."] # Cherche les packages dans le répertoire courant
+where = ["."]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.9"
+strict = true

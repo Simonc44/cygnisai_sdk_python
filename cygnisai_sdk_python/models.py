@@ -1,42 +1,104 @@
-# cygnisai_sdk_python/models.py
+"""
+CygnisAI SDK - Data Models
+Pydantic v2 models for request/response validation.
+"""
 
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
 import uuid
 
-# --- Modèles pour l'API de Chat ---
+from pydantic import BaseModel, Field, field_validator
+
+
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
+
+class Role(str, Enum):
+    """Valid message roles."""
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+# ---------------------------------------------------------------------------
+# Core models
+# ---------------------------------------------------------------------------
 
 class Message(BaseModel):
-    """
-    Représente un message dans une conversation de chat.
-    """
-    role: str = Field(..., description="Le rôle de l'auteur du message (ex: 'user', 'assistant').")
-    content: str = Field(..., description="Le contenu textuel du message.")
+    """A single turn in a conversation."""
+
+    role: Role = Field(..., description="Author role: 'user', 'assistant', or 'system'.")
+    content: str = Field(..., min_length=1, description="Text content of the message.")
+
+    model_config = {"use_enum_values": True}
+
+
+class UsageInfo(BaseModel):
+    """Token-usage breakdown returned by the API."""
+
+    prompt_tokens: Optional[int] = Field(None, ge=0)
+    completion_tokens: Optional[int] = Field(None, ge=0)
+    total_tokens: Optional[int] = Field(None, ge=0)
+
+    # Keep extra fields from the API without failing validation
+    model_config = {"extra": "allow"}
+
 
 class ChatRequest(BaseModel):
-    """
-    Représente la requête pour l'API de chat.
-    """
-    model: str = Field(..., description="Le nom du modèle de langage enregistré par l'API CygnisAI (ex: 'alpha1', 'alpha2').")
-    prompt: str = Field(..., description="Le message principal ou la question pour le modèle.")
-    messages: Optional[List[Message]] = Field(None, description="Historique de la conversation.")
-    stream: bool = Field(False, description="Si la réponse doit être streamée (True pour le streaming, False pour la réponse complète).")
+    """Payload sent to POST /v3/chat."""
+
+    model: str = Field(..., min_length=1, description="Model name, e.g. 'alpha2'.")
+    prompt: str = Field(..., min_length=1, description="User prompt / question.")
+    messages: Optional[List[Message]] = Field(
+        None, description="Conversation history (optional)."
+    )
+    stream: bool = Field(False, description="Enable SSE streaming.")
+
+    @field_validator("messages", mode="before")
+    @classmethod
+    def _messages_not_empty_list(cls, v: Any) -> Any:
+        if isinstance(v, list) and len(v) == 0:
+            return None
+        return v
+
 
 class ChatResponse(BaseModel):
-    """
-    Représente la réponse de l'API de chat.
-    """
-    id: uuid.UUID = Field(..., description="L'identifiant unique de la réponse du chat.")
-    response: str = Field(..., description="La réponse textuelle complète du modèle.")
-    latency_ms: int = Field(..., description="La latence de la réponse en millisecondes.")
-    redacted: bool = Field(..., description="Indique si la réponse a été censurée.")
-    usage: Dict[str, Any] = Field(..., description="Informations sur l'utilisation des tokens.") # Peut être plus détaillé si vous avez un modèle Pydantic pour l'usage
+    """Successful non-streaming response from POST /v3/chat."""
 
-# --- Modèle d'erreur standardisé (correspond à celui de votre API) ---
+    id: uuid.UUID = Field(..., description="Unique response identifier.")
+    response: str = Field(..., description="Full model reply.")
+    latency_ms: int = Field(..., ge=0, description="Round-trip latency in milliseconds.")
+    redacted: bool = Field(..., description="Whether the reply was moderated.")
+    usage: UsageInfo = Field(..., description="Token-usage statistics.")
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def _coerce_usage(cls, v: Any) -> Any:
+        if isinstance(v, dict):
+            return UsageInfo(**v)
+        return v
+
+
+# ---------------------------------------------------------------------------
+# Error model
+# ---------------------------------------------------------------------------
+
+class ErrorDetail(BaseModel):
+    """Individual validation-error entry (FastAPI style)."""
+
+    loc: List[str] = Field(default_factory=list)
+    msg: str = ""
+    type: str = ""
+
+
 class ErrorResponse(BaseModel):
-    """
-    Représente une réponse d'erreur standardisée de l'API CygnisAI.
-    """
-    code: str = Field(..., description="Un code d'erreur unique (ex: 'INTERNAL_SERVER_ERROR', 'VALIDATION_ERROR').")
-    message: str = Field(..., description="Un message d'erreur lisible par l'utilisateur.")
-    details: Optional[List[Dict[str, Any]]] = Field(None, description="Détails supplémentaires de l'erreur, souvent pour le débogage.")
+    """Standardised error envelope returned by the API."""
+
+    code: str = Field(..., description="Machine-readable error code.")
+    message: str = Field(..., description="Human-readable error message.")
+    details: Optional[List[ErrorDetail]] = Field(
+        None, description="Validation details when applicable."
+    )
