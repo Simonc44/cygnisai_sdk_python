@@ -1,5 +1,9 @@
 # CygnisAI Python SDK
 
+[![PyPI version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Simonc44/cygnisai_sdk_python)
+[![Python Version](https://img.shields.io/badge/python-3.9%2B-brightgreen)](https://github.com/Simonc44/cygnisai_sdk_python)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 The simplest, fastest way to integrate CygnisAI language models into your Python projects.
 
 > **Note:** API access is currently in **private beta**. Key creation is not yet open to the public.
