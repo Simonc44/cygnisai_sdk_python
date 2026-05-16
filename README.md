@@ -17,7 +17,7 @@ The simplest, fastest way to integrate CygnisAI language models into your Python
 ```bash
 pip install cygnis-sdk-python
 ```
-With git :
+<small>With `git`:</small>
 ```bash
 pip install git+https://github.com/Simonc44/cygnisai_sdk_python.git
 ```
